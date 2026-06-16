@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "checks": {
+    "sota_api_token": {
+      "name": "sota_api_token",
+      "ok": true,
+      "reason": "len=64"
+    },
+    "transreid_weight": {
+      "name": "transreid_weight",
+      "ok": true,
+      "reason": "active_model='pphuman_strongbaseline'; skipped"
+    },
+    "pphuman_pipeline": {
+      "name": "pphuman_pipeline",
+      "ok": true,
+      "reason": "pipeline='/home/rhendy/paddledetection/deploy/pipeline/pipeline.py'"
+    },
+    "infra_env": {
+      "name": "infra_env",
+      "ok": true,
+      "reason": "all env vars present"
+    },
+    "docker_compose": {
+      "name": "docker_compose",
+      "ok": true,
+      "reason": "valid"
+    },
+    "benchmark_dir": {
+      "name": "benchmark_dir",
+      "ok": true,
+      "reason": "path=/home/rhendy/Projects/yamaha/SOTA-Paddle-MTMC/reports"
+    }
+  },
+  "evaluated_at": "2026-06-12T19:38:29Z",
+  "mode": "production"
+}

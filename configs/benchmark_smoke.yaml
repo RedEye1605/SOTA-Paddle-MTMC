@@ -1,0 +1,41 @@
+# =============================================================================
+# SOTA-Paddle-MTMC — smoke benchmark dataset manifest
+#
+# This is a SMOKE-ONLY manifest used by:
+#
+#   uv run python scripts/benchmark_t4.py \
+#       --mode smoke_benchmark \
+#       --dataset configs/benchmark_smoke.yaml \
+#       --max-seconds 10
+#
+# It points at short stub videos under ./data/ (created with ffmpeg
+# from a `testsrc` source). The smoke benchmark exercises the
+# multi-camera runner, per-camera queues, and the synthetic
+# detector path — it produces a valid `benchmark_<ts>.json`
+# report that the readiness gate consumes for
+# READY_FOR_SHADOW_TEST.
+#
+# To regenerate the stub videos:
+#
+#   ffmpeg -y -f lavfi -i "testsrc=duration=10:size=640x480:rate=5" \
+#       -c:v libx264 -pix_fmt yuv420p data/cam01.mp4
+#   ffmpeg -y -f lavfi -i "testsrc=duration=10:size=640x480:rate=5" \
+#       -c:v libx264 -pix_fmt yuv420p data/cam02.mp4
+# =============================================================================
+dataset:
+  name: yamaha_smoke_stub
+  site_id: yamaha_demo_smoke
+  timezone: Asia/Jakarta
+  cameras:
+    - camera_id: CAM_01
+      video_path: data/cam01.mp4
+      width: 640
+      height: 480
+      fps_target: 5
+    - camera_id: CAM_02
+      video_path: data/cam02.mp4
+      width: 640
+      height: 480
+      fps_target: 5
+  labels:
+    optional_ground_truth_path: ""

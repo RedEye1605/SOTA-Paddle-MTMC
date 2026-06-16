@@ -1,0 +1,84 @@
+# =============================================================================
+# SOTA-Paddle-MTMC — production benchmark on real cam_merged videos
+#
+# This manifest is the production counterpart of ``configs/benchmark.yaml``.
+# It points at the multi-hour ``cam1_merged.mp4`` and ``cam2_merged.mp4``
+# files copied from the upstream Service/data/ folder in Phase 2.
+#
+# Used by:
+#   uv run python scripts/benchmark_t4.py \
+#       --mode production_benchmark \
+#       --dataset configs/benchmark_real_cam_merged.yaml \
+#       --max-seconds 60
+#
+# IMPORTANT: the readiness gate refuses
+# ``READY_FOR_LIMITED_PRODUCTION`` unless this manifest runs without
+# detector crashes and the required real metrics are produced.
+# =============================================================================
+
+dataset:
+  name: cam_merged_validation
+  site_id: yamaha_showroom
+  timezone: Asia/Jakarta
+  cameras:
+    - camera_id: CAM_01
+      video_path: data/cam1_merged.mp4
+    - camera_id: CAM_02
+      video_path: data/cam2_merged.mp4
+  camera_links_file: configs/camera_links.yaml
+  zones_file: configs/zones.yaml
+  labels:
+    # No manual labels are present for the cam_merged set yet.
+    # Without labels, the readiness gate caps the verdict at
+    # ``READY_FOR_SHADOW_TEST`` regardless of detector / ReID quality.
+    optional_ground_truth_path: null
+
+retention:
+  identity_window_seconds: 86400
+  qdrant_vector_retention_seconds: 86400
+  redis_recent_identity_ttl_seconds: 86400
+  tracking_event_retention_days: 7
+  crop_retention_days: 7
+  audit_retention_days: 30
+
+evidence:
+  rekey_after_global_id: true
+  keep_pending_copy: false
+  rekey_retry_max: 3
+  pending_prefix: "evidence/pending"
+
+evidence_sampling:
+  sample_every_n: 50
+  labeler_bucket: labeler
+  retention_days: 90
+
+gate:
+  false_merge_rate_max: 0.05
+  cross_camera_match_accuracy_min: 0.85
+  fps_min: 5.0
+  gpu_memory_used_mb_max: 12000
+  qdrant_query_latency_p99_ms_max: 200
+  postgres_write_latency_p99_ms_max: 50
+  ambiguous_auto_merge_rate_max: 0.0
+  id_fragmentation_rate_max: 0.20
+
+identity:
+  auto_match_threshold: 0.82
+  candidate_threshold: 0.72
+  ambiguous_margin: 0.04
+  enable_stage3_24h_fallback: true
+  stage3_auto_match_threshold: 0.92
+  weights:
+    reid_weight: 0.55
+    temporal_weight: 0.20
+    camera_weight: 0.15
+    quality_weight: 0.05
+    zone_weight: 0.05
+
+reid:
+  run_on_stable_tracklet_only: true
+  min_track_age_frames: 10
+  max_crops_per_tracklet: 15
+  min_crops_per_tracklet: 5
+  min_person_height_px: 60
+  batch_size: 16

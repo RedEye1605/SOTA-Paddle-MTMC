@@ -1,0 +1,172 @@
+# =============================================================================
+# SOTA-Paddle-MTMC — legacy Service/offline-people-counting contract.
+#
+# This file is the single source of truth for the *external* integration
+# contract (MQTT topics, MinIO bucket/prefix, stream paths, ROI polygons)
+# that the legacy pipeline at Service/offline-people-counting uses. It
+# is read by app/integrations/legacy_contract.py and the tests in
+# tests/integrations/test_legacy_contract_*.py.
+#
+# If the legacy pipeline changes a value, update it here and rerun the
+# regression tests; the new pipeline will then automatically match the
+# new contract.
+#
+# DO NOT put secrets in this file. Credentials come from .env.
+# =============================================================================
+
+# ---- MQTT broker / topic contract ----
+mqtt:
+  # Must equal Service/offline-people-counting/app/io/mqtt_topics.py
+  topic_base: "ai/yamaha/people-detection"
+  qos: 1
+  retain: false
+  keepalive_seconds: 60
+  publish_interval_seconds: 3
+  history_send_interval_seconds: 2
+  # Client id format. The legacy pipeline uses
+  #   people_counter_{device_name}_{epoch}_{rand}
+  client_id_prefix: "people_counter"
+  # Default per-camera topic channels. The {camera_id} placeholder is
+  # filled with the *normalized* camera id (e.g. "cam1"), and the
+  # telemetry topic is `{topic_base}/{camera_id}/summary`.
+  channels:
+    telemetry: "summary"
+    attributes: "attributes"
+    events: "event"
+    status: "status"
+    command: "command"   # under {topic_base}/+/command
+
+# ---- Per-camera device config (CAM_01 / CAM_02) ----
+devices:
+  CAM_01:
+    device_name: "cam_1"            # legacy normalization: cam_1 -> cam1
+    device_type: "People Counting"
+    location: "Main Entrance - Cam 1"
+    category: "ymh"
+    integration: "yamaha"
+    subsystem: "demo"
+    site_id: "site_001"
+  CAM_02:
+    device_name: "cam_2"
+    device_type: "People Counting"
+    location: "Main Entrance - Cam 2"
+    category: "ymh"
+    integration: "yamaha"
+    subsystem: "demo"
+    site_id: "site_001"
+
+# ---- MinIO evidence contract ----
+minio:
+  bucket: "yamaha-poc"               # legacy default
+  object_prefix: "people-detection"  # legacy default
+  object_date_format: "%Y-%m-%d"
+  location_title: "main_hallway"
+  presigned_url_expiry_days: 7
+  max_consecutive_failures: 5
+  upload_max_attempts: 3
+  upload_backoff_base_seconds: 2.0
+  # Object path: {object_prefix}/{camera_id}/{zone_slug}/{date}/{epoch_ms}_{person_id}.jpg
+  #   - camera_id is the *normalized* legacy id (cam1, cam2)
+  #   - zone_slug is the zone name lowercased + non-alphanum -> '-'
+  #   - zone is "main_hallway" if absent
+
+# ---- Streaming contract (MediaMTX) ----
+streaming:
+  rtsp_port: 8554
+  hls_port: 8889
+  webrtc_port: 8890
+  fps: 10
+  bitrate_kbps: 1800
+  stream_width: 960
+  stream_height: 540
+  # URL templates. The legacy pipeline builds:
+  #   publish:  rtsp://{host}:{rtsp_port}/{camera_id}/live
+  #   hls:      http://{host}:{hls_port}/{camera_id}/live/index.m3u8
+  #   webrtc:   http://{host}:{webrtc_port}/{camera_id}/live
+  publish_url: "rtsp://{host}:{rtsp_port}/{camera_id}/live"
+  hls_url: "http://{host}:{hls_port}/{camera_id}/live/index.m3u8"
+  webrtc_url: "http://{host}:{webrtc_port}/{camera_id}/live"
+
+# ---- ROI / zone config ----
+# Polygons are in *original* (source) video coordinates, exactly as
+# they appear in Service/offline-people-counting/config.yaml. The new
+# pipeline scales them to processing_size at runtime, using
+# original_size as the denominator.
+cameras:
+  cam1:
+    video:
+      path: "../data/cam1_merged.mp4"
+      original_size: [3072, 2048]
+      display_size: [960, 540]
+      fps: 15
+    rois:
+      - name: "Fazzio & Filano Zone"
+        points: [[102, 792], [742, 608], [2968, 2048], [534, 2048]]
+      - name: "Active Zone"
+        points: [[112, 512], [1090, 300], [1806, 702], [1236, 856], [782, 556], [168, 724]]
+      - name: "Dealing Zone 1"
+        points: [[1372, 882], [2016, 688], [2644, 1032], [2016, 1288]]
+      - name: "Island Zone"
+        points: [[1902, 470], [2436, 230], [3040, 582], [2510, 802]]
+    statistics:
+      min_dwell_time: 120.0
+      ttl_frames: 90
+      min_track_length: 10
+    visual:
+      zone_colors:
+        "Fazzio & Filano Zone": [0, 242, 255]
+        "Active Zone":          [255, 0, 255]
+        "Dealing Zone 1":       [0, 0, 255]
+        "Island Zone":          [255, 255, 255]
+  cam2:
+    video:
+      path: "../data/cam2_merged.mp4"
+      original_size: [2592, 1944]
+      display_size: [960, 540]
+      fps: 15
+    rois:
+      - name: "Sport Zone"
+        points: [[270, 886], [1390, 588], [2592, 1358], [2592, 1944], [786, 1944]]
+      - name: "Premium Zone"
+        points: [[108, 260], [710, 84], [988, 260], [242, 776]]
+      - name: "Dealing Zone 2"
+        points: [[912, 380], [1246, 304], [1312, 520], [968, 604]]
+      - name: "Island Zone"
+        points: [[1572, 516], [1912, 288], [2480, 596], [2174, 896]]
+    statistics:
+      min_dwell_time: 120.0
+      ttl_frames: 90
+      min_track_length: 10
+    visual:
+      zone_colors:
+        "Sport Zone":     [0, 255, 51]
+        "Premium Zone":   [221, 0, 0]
+        "Dealing Zone 2": [0, 0, 255]
+        "Island Zone":    [255, 255, 255]
+
+# ---- Pipeline thresholds (legacy values, used by the integration tests) ----
+thresholds:
+  conf_threshold: 0.5
+  tracker_conf_threshold: 0.5
+  gallery_match_threshold: 0.70
+  gallery_same_camera_threshold: 0.80
+  gallery_cross_camera_threshold: 0.55
+  gallery_prototype_min_cosine: 0.80
+  dwell_min_seconds: 120.0
+  tracklet_ttl_frames: 90
+  tracklet_min_length: 10
+
+# ---- Feature toggles (NEW in the new pipeline) ----
+# These toggles only affect visualization and outbound integration;
+# the internal tracker still uses the legacy thresholds above for
+# counting, tracking, and benchmark metrics.
+toggles:
+  ENABLE_SEND_MQTT: true
+  ENABLE_MINIO_UPLOAD: true
+  ENABLE_TRACK_ID: true
+  SHOW_ROI_ZONES: true
+  SHOW_CONFIDENCE_SCORE: true
+  SHOW_TRACK_ID: true
+  SHOW_DETECTION_BOX: true
+  SHOW_CAMERA_LABEL: true
+  SHOW_COUNTING_OVERLAY: true

@@ -1,0 +1,385 @@
+name: yamaha-mtmct
+
+# =============================================================================
+# SOTA-Paddle-MTMC — docker-compose
+# Brings up infra (Postgres, Qdrant, Redis, MinIO) and the API worker.
+# =============================================================================
+
+services:
+  relation-store:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yamaha_mtmct}
+      POSTGRES_USER: ${POSTGRES_USER:-yamaha}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - relation-store-data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-yamaha} -d ${POSTGRES_DB:-yamaha_mtmct}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  vector-store:
+    image: qdrant/qdrant:v1.12.0
+    restart: unless-stopped
+    # PATCH (2026-06-15): Qdrant uses RocksDB for payload indexes,
+    # which opens one FD per segment per collection. The default
+    # Docker ulimit (1024) is too low for a stack with 4+ ReID
+    # collections; RocksDB aborts with "Too many open files". Bump
+    # to 65536 to match the operator's host (already configured in
+    # /etc/systemd/system/docker.service.d/override.conf). If the
+    # host's nofile is lower than this, the container inherits the
+    # host's limit, so the operator must also raise the host's
+    # `ulimit -n` for the change to take effect.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - vector-store-data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    healthcheck:
+      # The qdrant image is minimal (no curl/wget). Probe via bash
+      # /dev/tcp, which is always present.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  message-bus:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - message-bus-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # PATCH (2026-06-17): internal minio service removed. The operator's
+  # existing external MinIO cluster (configured via MINIO_ENDPOINT in
+  # .env) is the single source of truth. No local minio container,
+  # no minio_data volume, no healthcheck on a dead service.
+
+  db-migrator:
+    image: postgres:16-alpine
+    depends_on:
+      relation-store:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_USER: ${POSTGRES_USER:-yamaha}
+      POSTGRES_DB: ${POSTGRES_DB:-yamaha_mtmct}
+    volumes:
+      - ./db/migrations:/migrations:ro
+      # PATCH (2026-06-17): the migrator command was moved out of
+      # compose's block-scalar into a real shell script. Compose v2's
+      # `$$` escape is broken inside `command: |` (the literal `$$f`
+      # was being passed to the shell, which expanded `$$` to its
+      # PID). The script approach is simpler and more debuggable.
+      - ./scripts/migrate.sh:/usr/local/bin/migrate.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/migrate.sh"]
+
+  storage-janitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    image: yamaha-mtmct:api
+    entrypoint: ["/opt/venv/bin/python"]
+    restart: unless-stopped
+    depends_on:
+      relation-store:
+        condition: service_healthy
+      vector-store:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+    working_dir: /app
+    command: ["-m", "scripts.retention_worker"]
+
+  detect-pipeline:
+    # PATCH (2026-06-17): the api image is now built locally from the
+    # multi-stage Dockerfile's `api` target — no prebuilt
+    # `paddle33-numpy126-b2-api` image needed. PaddleDetection
+    # source is NOT baked into the image; it lives in the named
+    # `paddledetection` volume and is auto-cloned on first start
+    # by the entrypoint. This brings the api image down from
+    # ~25 GB to ~6 GB and the build time from ~30 min to ~8 min.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    image: yamaha-mtmct:api
+    restart: unless-stopped
+    depends_on:
+      relation-store:
+        condition: service_healthy
+      vector-store:
+        condition: service_healthy
+      message-bus:
+        condition: service_healthy
+    env_file: .env
+    # PPHUMAN_PIPELINE_PATH points at the PaddleDetection clone
+    # in the named `paddledetection` volume (auto-cloned by the
+    # entrypoint on first start). These paths are container-only —
+    # the api container must NEVER inherit the operator's HOST
+    # paths via .env. We assign with `:-` defaults AND we
+    # deliberately do NOT pass through the host's values: the keys
+    # are listed in `environment` (not `env_file`) so the values
+    # below win over any same-named .env entry.
+    environment:
+      PPHUMAN_PIPELINE_PATH: /opt/paddledetection/deploy/pipeline/pipeline.py
+      # B2: ATTR is off (StrongBaseline is Paddle 2.x format) but
+      # DET + MOT still run, which is what PP-Human needs to push
+      # annotated frames to MediaMTX.
+      PPHUMAN_INFER_CONFIG: /app/configs/pphuman/infer_cfg_pphuman_sota.yml
+      PPHUMAN_MODEL_DIR: /models/pphuman
+      PPHUMAN_REID_MODEL_DIR: /models/pphuman/strongbaseline_r50_30e_pa100k
+      # B2: paddle 3.3.1's cu118 wheel does not bundle TensorRT.
+      # Force paddle-inference (native) instead of trt_fp16.
+      PPHUMAN_RUN_MODE: paddle
+      TRANSREID_WEIGHT: /models/vit_transreid_msmt.pth
+      # Sync MinIO upload so frame_uri is populated in the
+      # side-channel XADD. See BUG-5 / history notes.
+      PPHUMAN_SKIP_FRAME_UPLOAD: "0"
+      # PATCH-051 fix: cudnn (and the rest of the nvidia
+      # runtime libs) is shipped inside the paddlepaddle-gpu
+      # wheel at /opt/venv/lib/python3.12/site-packages/nvidia/*.
+      # paddle.inference looks them up via the dynamic loader's
+      # default search path (ld.so.cache + LD_LIBRARY_PATH);
+      # without these entries the subprocess aborts with
+      # ``cudnn_dso_handle should not be null``.
+      LD_LIBRARY_PATH: /opt/venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cuda_cupti/lib:/opt/venv/lib/python3.12/site-packages/nvidia/nccl/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cublas/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cufft/lib:/opt/venv/lib/python3.12/site-packages/nvidia/curand/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cusolver/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cusparse/lib:/opt/venv/lib/python3.12/site-packages/nvidia/nvtx/lib
+    volumes:
+      # Read-only mounts for live code/config overrides (e.g.
+      # during dev). The baked copy in the image is the fallback.
+      - ./configs:/app/configs:ro
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      # Operator-recorded datasets land here (smoke stubs + real
+      # multi-camera recordings).  Read-only inside the container.
+      - ./data:/data:ro
+      - ./data:/app/data:ro
+      # Benchmark reports are written by scripts/benchmark_t4.py
+      # and consumed by scripts/readiness_gate.py on the host. Use a
+      # tmpfs (always writable, fresh per container) and mount the
+      # host's bench output dir on top so reports survive restart.
+      - bench-reports:/app/reports
+      # PaddleDetection source (release/2.9). Lives in a named volume
+      # that's auto-cloned on first start by the entrypoint script.
+      # The two hotfix files below override the cloned copies at
+      # runtime. The volume is mounted :rw because docker needs to
+      # create intermediate directories for the bind-mounts; the api
+      # process itself only reads from this path.
+      - paddledetection:/opt/paddledetection
+      # PATCH-053 fix: the api container needs the PP-Human model
+      # files at /models/pphuman/<NAME>/. The host's ./models
+      # directory is the source of truth (populated by
+      # scripts/download_pphuman_models.sh). Bind-mount the host's
+      # ./models read-only so the api container can see the model
+      # files but cannot mutate them.
+      - ./models:/models:ro
+      # PATCH-2026-06-15 hotfix: bind-mount a patched
+      # pipe_utils.py into PaddleDetection so the PP-Human
+      # internal ffmpeg relayer forces H.264/libx264 instead of
+      # MPEG-4 (the latter prevents MediaMTX's HLS muxer from
+      # instantiating). This is a temporary vendor hotfix
+      # until the change is baked into the Dockerfile or
+      # upstreamed. No image rebuild required.
+      - ./app/detection/_vendor/paddledetection_pipe_utils.py:/opt/paddledetection/deploy/pipeline/pipe_utils.py:ro
+      # PATCH-2026-06-15 hotfix (continuation): bind-mount a
+      # patched pipeline.py so PP-Human's capturevideo() loops
+      # the local file on EOF instead of returning. Without
+      # this, the 2-hour real videos die after 2h and the
+      # MediaMTX HLS path goes 404. Same vendor-hotfix
+      # rationale as the pipe_utils.py mount above; no image
+      # rebuild required.
+      - ./app/detection/_vendor/paddledetection_pipeline.py:/opt/paddledetection/deploy/pipeline/pipeline.py:ro
+      # PATCH-2026-06-18 hotfix: bind-mount a patched
+      # ppyoloe_head.py. Paddle 2.6.2's IR replaces the
+      # 1x1 ``ESEAttn.fc`` ``nn.Conv2D`` with the C++
+      # ``fused_conv2d_add_act`` op (compiled against cuDNN
+      # 8.6 / CUDA 11.8), which the system's cuDNN 8.9
+      # rejects with ``CUDNN_STATUS_NOT_SUPPORTED``. The
+      # hotfix rewrites ``ESEAttn`` to hold the conv weights
+      # as raw parameters and call ``F.conv2d`` directly so
+      # Paddle's IR cannot fuse the call. Without this, the
+      # PP-Human subprocess crashes on every frame at
+      # ppyoloe_head.py:43 (the ``ESEAttn.forward`` sigmoid
+      # line). See header in the vendored file for the full
+      # analysis.
+      - ./app/detection/_vendor/paddledetection_ppyoloe_head.py:/opt/paddledetection/ppdet/modeling/heads/ppyoloe_head.py:ro
+      # PATCH-2026-06-18 hotfix: bind-mount a patched
+      # det_infer.py. Paddle's inference ``Config`` defaults
+      # to ``switch_ir_optim(True)`` for GPU, which enables
+      # the IR pass that fuses ``conv2d + bias + activation``
+      # into the C++ ``fused_conv2d_add_act`` op. That op
+      # is compiled against cuDNN 8.6 / CUDA 11.8 and fails
+      # on the system's cuDNN 8.9 with CUDNN_STATUS_NOT_SUPPORTED.
+      # The hotfix adds ``config.switch_ir_optim(False)`` after
+      # the original True call to disable the fusion. The
+      # unfused conv2d + bias + activation path is portable
+      # across cuDNN 8 and 9 (with a ~5% throughput cost).
+      # This hotfix is a complement to the ppyoloe_head.py
+      # one: even after the head uses F.conv2d directly, the
+      # IR pass at inference-config level could still fuse
+      # any other conv2d in the pipeline. Disabling it at
+      # the config level covers the entire model.
+      - ./app/detection/_vendor/paddledetection_det_infer.py:/opt/paddledetection/deploy/pptracking/python/det_infer.py:ro
+    ports:
+      - "8000:8000"
+    # PATCH-047 fix: the api service has a healthcheck. The
+    # ``/health`` endpoint is public (no auth) and reports the
+    # dependency status (PG/Qdrant/Redis/MinIO) without leaking
+    # secrets. We use the python urllib to avoid an extra curl
+    # install in the runtime image.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; r = urllib.request.urlopen('http://localhost:8000/health', timeout=2); sys.exit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+    # The entrypoint already exec's /opt/venv/bin/python with these
+    # args, so we only pass the module path here (no leading "python").
+    command: ["-m", "app.main"]
+
+  # Offline MTMCT eval / dev worker. Built from Dockerfile,
+  # which extends the api image through the `sidecar` target and adds
+  # torch + torchvision + TransReID there. Lives in the `eval` profile so it does
+  # NOT come up with the default `docker compose up`. Bring it up
+  # explicitly with: `docker compose --profile eval up replay-eval`.
+  #
+  # Why a separate image: torch 2.4+ transitively pulls cuDNN 9.x,
+  # which is ABI-incompatible with paddle 2.6.2's fused_conv2d_add_act
+  # (compiled against cuDNN 8.6). The api image must stay Paddle-only.
+  replay-eval:
+    profiles: ["eval"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: sidecar
+    image: sota-paddle-mtmct:eval
+    depends_on:
+      relation-store:
+        condition: service_healthy
+      vector-store:
+        condition: service_healthy
+      message-bus:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      PPHUMAN_PIPELINE_PATH: /opt/paddledetection/deploy/pipeline/pipeline.py
+      PPHUMAN_INFER_CONFIG: /opt/paddledetection/deploy/pipeline/config/infer_cfg_pphuman.yml
+      PPHUMAN_MODEL_DIR: /models/pphuman
+      PPHUMAN_REID_MODEL_DIR: /models/pphuman/strongbaseline_r50_30e_pa100k
+      TRANSREID_WEIGHT: /models/vit_transreid_msmt.pth
+      LD_LIBRARY_PATH: /opt/venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cuda_cupti/lib:/opt/venv/lib/python3.12/site-packages/nvidia/nccl/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cublas/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cufft/lib:/opt/venv/lib/python3.12/site-packages/nvidia/curand/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cusolver/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cusparse/lib:/opt/venv/lib/python3.12/site-packages/nvidia/nvtx/lib
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - ./data:/data:ro
+      - bench-reports:/app/reports
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  # PATCH (2026-06-15): TransReID sidecar. Runs the REAL ReID
+  # backbone (vit_base_patch16_224_TransReID, MSMT17-pretrained,
+  # 3840-dim JPM features) in the torch-enabled `sidecar` build
+  # target of the multi-stage Dockerfile. The api image stays
+  # Paddle-only. The sidecar consumes the same ``stream:tracklets``
+  # the api's reid_worker consumes (XREADGROUP
+  # group=reid_sidecar_workers, separate from the api's group), and
+  # writes 3840-dim embeddings to Qdrant
+  # ``person_reid_transreid_msmt``. The api's GlobalIdentityResolver
+  # reads those embeddings via the existing ``stream:embeddings``
+  # payload it already consumes — no resolver change required.
+  #
+  # PATCH (2026-06-17): the sidecar now uses the multi-stage
+  # Dockerfile's `sidecar` target (base + torch + torchvision) so
+  # both images share the same base layers. BuildKit can reuse
+  # the api's base cache for the sidecar build.
+  embedding-sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: sidecar
+    image: yamaha-mtmct:sidecar
+    restart: unless-stopped
+    depends_on:
+      relation-store:
+        condition: service_healthy
+      vector-store:
+        condition: service_healthy
+      message-bus:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      TRANSREID_WEIGHT: /models/vit_transreid_msmt.pth
+      REID_SIDECAR_DEVICE: cuda
+      REID_SIDECAR_PROFILE: msmt17
+      LD_LIBRARY_PATH: /opt/venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cuda_cupti/lib:/opt/venv/lib/python3.12/site-packages/nvidia/nccl/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cublas/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cufft/lib:/opt/venv/lib/python3.12/site-packages/nvidia/curand/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cusolver/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cusparse/lib:/opt/venv/lib/python3.12/site-packages/nvidia/nvtx/lib
+    volumes:
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - ./configs:/app/configs:ro
+      - ./data:/data:ro
+      - ./models:/models:ro
+    working_dir: /app
+    # The entrypoint already exec's /opt/venv/bin/python with these
+    # args, so we only pass the script path here (no leading "python").
+    command: ["scripts/run_transreid_sidecar.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis,sys,os;r=redis.from_url(os.environ.get('REDIS_URL','redis://message-bus:6379/0'));sys.exit(0 if r.ping() else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+volumes:
+  relation-store-data:
+  vector-store-data:
+  message-bus-data:
+  # Benchmark reports (tmpfs; survives container restart via Docker
+  # volume). For production, mount a host path here so reports
+  # persist across `docker compose up` cycles.
+  bench-reports:
+  # PaddleDetection source (release/2.9). Auto-cloned on first start
+  # by the detect-pipeline's entrypoint. Persistent across container
+  # restarts; persists until the volume is explicitly removed
+  # (`docker compose down -v`).
+  paddledetection:

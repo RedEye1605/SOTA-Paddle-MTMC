@@ -1,0 +1,82 @@
+# =============================================================================
+# SOTA-Paddle-MTMC — improvement loop + retention + benchmark
+# =============================================================================
+
+# PATCH-048/049: dataset manifest consumed by
+# ``scripts/benchmark_t4.py``. The smoke benchmark accepts this
+# schema even when the video paths are unreachable (it falls
+# back to synthetic detection + histogram ReID).
+dataset:
+  name: yamaha_showroom_smoke
+  site_id: yamaha_demo
+  timezone: Asia/Jakarta
+  cameras:
+    - camera_id: CAM_01
+      video_path: /data/cam01.mp4
+    - camera_id: CAM_02
+      video_path: /data/cam02.mp4
+  labels:
+    optional_ground_truth_path: /data/labels.json
+
+retention:
+  identity_window_seconds: 86400
+  qdrant_vector_retention_seconds: 86400
+  redis_recent_identity_ttl_seconds: 86400
+  tracking_event_retention_days: 7
+  crop_retention_days: 7
+  audit_retention_days: 30
+
+# PATCH-029: re-key evidence after the resolver assigns a global_id.
+# The tracklet collector first writes the best crop to
+# ``evidence/pending/{site}/{camera}/{tracklet_id}/best.jpg``. The
+# re-key worker then copies it to
+# ``evidence/{site}/{camera}/{zone}/{yyyy}/{mm}/{dd}/{global_id}/{tracklet_id}/best.jpg``.
+# ``keep_pending_copy`` controls whether the pending copy is deleted
+# after a successful re-key.
+evidence:
+  rekey_after_global_id: true
+  keep_pending_copy: false
+  rekey_retry_max: 3
+  pending_prefix: "evidence/pending"
+
+evidence_sampling:
+  sample_every_n: 50
+  labeler_bucket: labeler
+  retention_days: 90
+
+gate:
+  false_merge_rate_max: 0.05
+  cross_camera_match_accuracy_min: 0.85
+  fps_min: 5.0
+  gpu_memory_used_mb_max: 12000
+  qdrant_query_latency_p99_ms_max: 200
+  postgres_write_latency_p99_ms_max: 50
+  ambiguous_auto_merge_rate_max: 0.0
+  id_fragmentation_rate_max: 0.20
+
+# Per ``Audit/IMPROVEMENT_LOOP_PLAN.md`` Component 5, the deploy
+# starts with these thresholds and is retuned after 1 week of
+# labeler data:
+identity:
+  auto_match_threshold: 0.82
+  candidate_threshold: 0.72
+  ambiguous_margin: 0.04
+  enable_stage3_24h_fallback: true
+  stage3_auto_match_threshold: 0.92
+  weights:
+    reid_weight: 0.55
+    temporal_weight: 0.20
+    camera_weight: 0.15
+    quality_weight: 0.05
+    zone_weight: 0.05
+
+# ReID cadence: the audit's recommendation is to run ReID only on
+# stable tracklets (not per-frame). The collector enforces
+# ``min_track_age_frames=10`` before emitting.
+reid:
+  run_on_stable_tracklet_only: true
+  min_track_age_frames: 10
+  max_crops_per_tracklet: 15
+  min_crops_per_tracklet: 5
+  min_person_height_px: 60
+  batch_size: 16

@@ -1,0 +1,148 @@
+###############################################################################
+# SOTA-Paddle-MTMC — runtime config
+# Secrets live in .env, not here.
+###############################################################################
+
+app:
+  name: sota-paddle-mtmct
+  version: 0.1.0
+  processing_size: [960, 540]
+  mode: multi_rtsp   # multi_rtsp | single_cam_smoke | benchmark
+  visual: false       # NO overlay in production (T4 cycles)
+
+runtime:
+  device: gpu
+  gpu_id: 0
+  run_mode: trt_fp16
+  cpu_threads: 8
+  log_interval_seconds: 30
+  gpu_memory_log_interval_seconds: 10
+
+streams:
+  mode: multi_rtsp
+  max_initial_cameras: 2
+  target_analytics_fps: 5
+  skip_frame_num: 2
+  reconnect_max_retries: 10
+  reconnect_backoff_seconds: 5
+
+detection_tracking:
+  framework: paddledetection_pphuman
+  model_profile: pedestrian_tracking_lightweight
+  fallback_model_profile: pedestrian_tracking_high_precision
+  detector_batch_size: 1
+  tracker: official_pphuman_tracker
+  prefer_ocsort: true
+  # Official Paddle tracker config — copy/adapt from
+  # PaddleDetection/deploy/pipeline/config/tracker_config.yml
+  tracker_config_path: configs/pphuman/tracker_config.yml
+  pphuman_infer_config: configs/pphuman/infer_cfg_pphuman_sota.yml
+  pphuman_model_dir: /models/pphuman
+
+reid:
+  # PATCH (2026-06-15, operator spec, transreid-only): the
+  # operator dropped pphuman_strongbaseline / vanilla-transreid
+  # / clipreid. The api and sidecar both run TransReID MSMT17
+  # (vit_transreid_msmt.pth, 3840-dim cosine). The api image is
+  # torch-free, so the api reid_worker is a passthrough that
+  # downloads BGR frames and hands off to the sidecar via
+  # stream:tracklets. ``active_model: transreid_msmt`` is
+  # what main.py::select_reid_adapter() now expects.
+  active_model: transreid_msmt
+  profile: msmt17
+  ignore_classifier_head: true
+  embedding_dim: 3840
+  run_on_stable_tracklet_only: true
+  min_track_age_frames: 10
+  max_crops_per_tracklet: 15
+  min_crops_per_tracklet: 5
+  min_person_height_px: 60
+  normalize_embeddings: true
+  batch_size: 16
+  transreid_weight: /models/vit_transreid_msmt.pth
+
+identity:
+  persistence_window_seconds: 86400
+  auto_match_threshold: 0.82
+  candidate_threshold: 0.72
+  ambiguous_margin: 0.04
+  # PATCH (2026-06-17, BUG-1): high-confidence ReID cosine
+  # short-circuit. When the top-1 Qdrant hit is at or above this
+  # cosine AND the margin from top-2 is at least ambiguous_margin,
+  # the resolver returns "match" regardless of the 5-factor
+  # final_score. Without this, time_diff=150s gives final_score=0.658
+  # even with cosine=0.998 (temporal_score=0.044) → "new" → 1 person
+  # = N stored embeddings. Set to null to disable and use the old
+  # 5-factor-only behavior.
+  reid_override_threshold: 0.95
+  prefer_new_id_when_ambiguous: true
+  use_camera_topology: true
+  use_zone_transitions: true
+  weights:
+    reid_weight: 0.55
+    temporal_weight: 0.20
+    camera_weight: 0.15
+    quality_weight: 0.05
+    zone_weight: 0.05
+
+storage:
+  postgres_enabled: true
+  qdrant_enabled: true
+  redis_enabled: true
+  minio_enabled: true
+  redis_ttl_seconds:
+    local_binding: 60
+    tracklet_buffer: 300
+    recent_identity: 86400
+
+telemetry:
+  mqtt_enabled: true
+  thingsboard_format: true
+  publish_interval_seconds: 10
+  api_enabled: true
+  api_host: 0.0.0.0
+  api_port: 8000
+  metrics_enabled: true
+
+queues:
+  tracklet_buffer_capacity: 5000
+  backpressure_pause_threshold: 4500
+  streams:
+    tracklets: stream:tracklets
+    embeddings: stream:embeddings
+    identity_decisions: stream:identity_decisions
+    telemetry: stream:telemetry
+
+# 2026-06-16, SAHI integration. Augmenting detection pass for
+# small/distant people that PP-Human misses at 1920x1080.
+# All values are env-var overrides (see .env.example). The defaults
+# below match the .env.example defaults. SAHI_ENABLED=false is the
+# production default; enable per environment.
+sahi:
+  enabled: false
+  patch_size: 320
+  overlap_ratio: 0.2
+  min_area: 30
+  nms_iou: 0.5
+  filter_threshold: 0.4
+  union_nms_iou: 0.5
+  union_min_conf: 0.4
+  stale_ms: 400
+  timestamp_slack_ms: 50
+  rate_limit_hz: 5.0
+  device: "gpu:0"
+  rtsp_urls:
+    - "rtsp://mediamtx:8554/cam1_merged/"
+    - "rtsp://mediamtx:8554/cam2_merged/"
+  camera_ids:
+    - "CAM_01"
+    - "CAM_02"
+  latest_key_prefix: "sahi:latest:"
+  stream: "stream:detections_sahi"
+  bridge:
+    consumer_group: "sahi_bridge_workers"
+    consumer_name: "sahi-bridge-01"
+    sahi_window_ms: 2000
+    pphuman_window_ms: 1000
+    dedup_iou: 0.3
+    poll_interval_ms: 200

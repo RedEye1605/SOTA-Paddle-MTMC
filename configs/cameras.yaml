@@ -1,0 +1,49 @@
+# =============================================================================
+# Cameras — registered CCTV feeds.
+# `rtsp_url_env_key` is the env-var name that holds the actual RTSP URL.
+# The URL itself is NEVER in this file (secrets live in .env).
+# =============================================================================
+
+site_id: showroom_jakarta_pusat
+timezone: Asia/Jakarta
+
+cameras:
+  - camera_id: CAM_01
+    name: Entrance Main
+    rtsp_url_env_key: CAM_01_RTSP_URL
+    width: 1920
+    height: 1080
+    fps_target: 25
+    is_active: true
+
+  - camera_id: CAM_02
+    name: Showroom Floor North
+    rtsp_url_env_key: CAM_02_RTSP_URL
+    width: 1920
+    height: 1080
+    fps_target: 25
+    is_active: true
+
+  - camera_id: CAM_03
+    name: Showroom Floor South
+    rtsp_url_env_key: CAM_03_RTSP_URL
+    width: 1920
+    height: 1080
+    fps_target: 25
+    is_active: true
+
+  - camera_id: CAM_04
+    name: VIP Lounge
+    rtsp_url_env_key: CAM_04_RTSP_URL
+    width: 1280
+    height: 720
+    fps_target: 15
+    is_active: true
+
+  - camera_id: CAM_05
+    name: Workshop / Service Bay
+    rtsp_url_env_key: CAM_05_RTSP_URL
+    width: 1920
+    height: 1080
+    fps_target: 15
+    is_active: true

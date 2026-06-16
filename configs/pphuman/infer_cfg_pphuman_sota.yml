@@ -1,0 +1,58 @@
+# =============================================================================
+# PP-Human pipeline inference config.
+# Copied / adapted from PaddleDetection's official
+# deploy/pipeline/config/infer_cfg_pphuman.yml.
+# This is the OFFICIAL config schema — do not invent fields.
+#
+# The top-level keys below (visual, warmup_frame, crop_thresh,
+# attr_thresh, kpt_thresh) are required by the upstream PaddleDetection
+# Pipeline.__init__ — see pipeline.py:84 self.vis_result = cfg['visual'].
+# The schema-completeness test
+# tests/test_pphuman_config_schema.py pins them so a future prune cannot
+# silently break the cudnn-9.x acceptance test.
+# =============================================================================
+
+# --- Top-level keys (Pinned by tests/test_pphuman_config_schema.py) ---
+# visual: True           — annotator enabled (bboxes drawn into HLS).
+#                          False would pass the constructor but produce
+#                          a video with no bboxes, masking real failures.
+# warmup_frame: 50       — frames skipped before MOT begins tracking.
+# crop_thresh: 0.5       — DET box score threshold.
+# attr_thresh: 0.5       — ATTR (StrongBaseline ReID) score threshold.
+# kpt_thresh: 0.2        — KPT (DarkHRNet) keypoint score threshold.
+visual: True
+warmup_frame: 50
+crop_thresh: 0.5
+attr_thresh: 0.5
+kpt_thresh: 0.2
+
+PIPELINE:
+  enable: True
+
+DET:
+  model_dir: /models/pphuman/mot_ppyoloe_l_36e_pipeline
+  batch_size: 1
+  enable: True
+
+MOT:
+  model_dir: /models/pphuman/mot_ppyoloe_l_36e_pipeline
+  tracker_config: configs/pphuman/tracker_config.yml
+  enable: True
+  batch_size: 1
+  skip_frame_num: -1
+
+# StrongBaseline ReID for attribute + cross-camera features
+ATTR:
+  model_dir: /models/pphuman/strongbaseline_r50_30e_pa100k
+  batch_size: 8
+  enable: True
+
+# Skeleton-based action recognition (kept off; can be enabled for fall detection)
+SKELETON_ACTION:
+  model_dir: /models/pphuman/STGCN
+  batch_size: 1
+  enable: False
+
+# ID switch logging for MTMCT eval
+MOT_EVAL:
+  enable: True

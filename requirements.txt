@@ -1,0 +1,53 @@
+# =============================================================================
+# SOTA-Paddle-MTMC — production runtime dependencies
+# =============================================================================
+# Pinned versions chosen to be ABI-compatible on the production
+# target (NVIDIA T4, CUDA 12.4, cuDNN 8.9).
+#
+# PaddlePaddle 2.6.x runtime constraint (see pyproject.toml):
+#   * paddle 2.6.2's `fused_conv2d_add_act_kernel` (PPYOLOE head) was
+#     compiled against cuDNN 8.6 + CUDA 11.8. Pin
+#     nvidia-cudnn-cu12 to the last 8.x release so the runtime ABI
+#     matches the compiled ABI. The Dockerfile's PATCH-051
+#     symlinks libcudnn.so -> libcudnn.so.8 so the loader picks
+#     the 8.x library and Paddle's MOT init completes.
+# =============================================================================
+
+# --- core runtime (CPU-only safe) ---
+numpy>=1.26,<2.0            # PATCH-051: pin <2.0 for imgaug.np.sctypes
+opencv-python==4.10.0.84    # imgaug requires opencv-python; avoid duplicate cv2 wheels
+PyYAML>=6.0
+pydantic>=2.7
+setuptools>=68             # paddle.utils.cpp_extension requires it
+scipy>=1.11                # picodet_postprocess
+imgaug>=0.4.0              # preprocess.py
+scikit-learn>=1.3          # MOT center_tracker
+tqdm>=4.66
+pandas>=2.0
+redis>=5.0
+psycopg[binary]>=3.2
+psycopg_pool>=3.2          # PATCH-001: pool moved out of psycopg in 3.2
+qdrant-client>=1.12
+minio>=7.2
+paho-mqtt>=2.1
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+python-dotenv>=1.0
+requests>=2.32
+
+# --- PP-Human / PaddleDetection MOT deps (PATCH 2026-06-18) ---
+# PaddleDetection's MOT pipeline (JDE/FairMOT/ByteTrack
+# linear assignment, JITed image ops, MTMCT evaluator) imports
+# ``lap``, ``numba``, and ``motmetrics`` lazily inside the
+# inference thread. If they are missing the subprocess
+# prints its config banner then hangs on the first
+# inference frame while the import raises — the parent
+# sees no stdout for the entire ``PPHUMAN_STALL_TIMEOUT_SEC``
+# window and the stall watchdog respawns the subprocess
+# forever. Pinned here to make the dependency explicit
+# in the runtime image rather than relying on
+# Dockerfile-side ``pip install``.
+lap==0.5.13
+numba==0.65.1
+motmetrics==1.4.0

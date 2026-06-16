@@ -1,0 +1,46 @@
+# =============================================================================
+# Tracker config for PP-Human pipeline.
+#
+# Pinned schema (per PaddleDetection/deploy/pptracking/python/mot_sde_infer.py
+# line 167): SDE_Detector reads `tracker_cfg['type']` and selects
+# OCSORTTracker / DeepSORTTracker / BOTSORTTracker. The tracker-specific
+# parameters must live under the matching top-level key. Our previous
+# version used `tracker: OC_SORT` and `OC_SORT:` which is NOT the
+# upstream schema — SDE_Detector raised KeyError: 'type' at MOT init.
+#
+# OC-SORT is the preferred tracker (per task spec, prefer_ocsort=true).
+# DeepSORT is the fallback if OC-SORT is not available in the release branch.
+#
+# Pinned by tests/test_pphuman_config_schema.py.
+# =============================================================================
+
+# Top-level `type` is what SDE_Detector consumes (mot_sde_infer.py:167).
+type: OCSORTTracker
+# All OC-SORT parameters under the matching block name.
+OCSORTTracker:
+  det_thresh: 0.4
+  max_age: 30
+  min_hits: 3
+  iou_threshold: 0.3
+  delta_t: 3
+  inertia: 0.2
+  min_box_area: 100
+  use_byte: False
+
+# Run on GPU by default; do NOT enable internal ReID (we do ReID separately
+# on stable tracklets, NOT per-frame).
+run_on_gpu: True
+use_ots: True
+frame_rate: 25
+
+# DeepSORT fallback (commented; uncomment if OCSORTTracker not in release branch)
+# type: DeepSORTTracker
+# DeepSORTTracker:
+#   max_dist: 0.2
+#   min_confidence: 0.4
+#   nms_max_overlap: 0.5
+#   max_iou_distance: 0.7
+#   max_age: 30
+#   n_init: 3
+#   nn_budget: 100
+#   use_cuda: True

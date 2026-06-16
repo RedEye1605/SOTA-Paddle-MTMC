@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.serena/
+
+# Environment / secrets
+.env
+.env.local
+.env.bak
+.env.bak.*
+*.pem
+*.key
+
+# Model weights
+models/*.pth
+models/*.onnx
+models/*.paddle
+models/*.pdmodel
+models/*.pdiparams
+models/*.pdparams
+models/*.pkl
+models/**/*.pth
+models/**/*.onnx
+models/**/*.paddle
+models/**/*.pdmodel
+models/**/*.pdiparams
+models/**/*.pdparams
+models/**/*.pkl
+
+# Generated artifacts
+*.pyc
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Docker volumes
+docker_volumes/
+postgres_data/
+qdrant_data/
+redis_data/
+
+# Operator data (recorded videos, evidence, etc.)
+data/
+/data/
+!data/.gitkeep

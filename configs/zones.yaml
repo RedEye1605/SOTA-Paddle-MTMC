@@ -1,0 +1,60 @@
+# =============================================================================
+# Zones — polygon ROIs per camera.
+# Polygons are normalized [0..1] so they survive resolution changes.
+# Coordinates are [[x, y], ...] in (x, y) order, closed implicitly.
+# =============================================================================
+
+zones:
+  - zone_id: Z01_CAM01_ENTRY
+    camera_id: CAM_01
+    name: Main Entrance
+    polygon_json: '[[0.40, 0.00], [0.60, 0.00], [0.60, 0.50], [0.40, 0.50]]'
+    zone_type: entry
+    is_entry_zone: true
+    is_exit_zone: false
+    enabled: true
+
+  - zone_id: Z02_CAM01_EXIT
+    camera_id: CAM_01
+    name: Main Exit
+    polygon_json: '[[0.40, 0.50], [0.60, 0.50], [0.60, 1.00], [0.40, 1.00]]'
+    zone_type: exit
+    is_entry_zone: false
+    is_exit_zone: true
+    enabled: true
+
+  - zone_id: Z03_CAM02_FLOOR
+    camera_id: CAM_02
+    name: Showroom Floor North
+    polygon_json: '[[0.10, 0.10], [0.90, 0.10], [0.90, 0.90], [0.10, 0.90]]'
+    zone_type: floor
+    is_entry_zone: false
+    is_exit_zone: false
+    enabled: true
+
+  - zone_id: Z04_CAM03_DISPLAY
+    camera_id: CAM_03
+    name: Bike Display Area
+    polygon_json: '[[0.20, 0.30], [0.80, 0.30], [0.80, 0.80], [0.20, 0.80]]'
+    zone_type: display
+    is_entry_zone: false
+    is_exit_zone: false
+    enabled: true
+
+  - zone_id: Z05_CAM04_VIP
+    camera_id: CAM_04
+    name: VIP Lounge
+    polygon_json: '[[0.15, 0.15], [0.85, 0.15], [0.85, 0.85], [0.15, 0.85]]'
+    zone_type: vip
+    is_entry_zone: false
+    is_exit_zone: false
+    enabled: true
+
+  - zone_id: Z06_CAM05_WORKSHOP
+    camera_id: CAM_05
+    name: Workshop Bay
+    polygon_json: '[[0.10, 0.10], [0.90, 0.10], [0.90, 0.90], [0.10, 0.90]]'
+    zone_type: workshop
+    is_entry_zone: false
+    is_exit_zone: false
+    enabled: true
